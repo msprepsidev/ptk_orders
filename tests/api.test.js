@@ -1,87 +1,119 @@
-const app = require('../server.js')
-const request = require('supertest')
+const request = require('supertest');
+const express = require('express');
 const sinon = require('sinon');
-const Customer = require( '../models/Customer.js');
-const CustomerController = require ('../controllers/customerController.js')
+const mongoose = require('mongoose');
+const MockAdapter = require('axios-mock-adapter');
+const axios = require('axios');
 
-let server;
+const OrderController = require('../controllers/orderController');
+const Order = require('../models/Order');
 
-beforeAll((done) => {
-    server = app.listen(5000, () => {
-        console.log('Test server running on port 5000');
-        done();
+const app = express();
+
+// Middleware pour parser le JSON
+app.use(express.json());
+
+// Routes pour OrderController
+app.post('/orders', OrderController.createOrder);
+app.get('/orders/:id', OrderController.getOrderById);
+app.get('/orders', OrderController.getAllOrders);
+app.put('/orders/:id', OrderController.updateOrder);
+app.delete('/orders/:id', OrderController.deleteOrder);
+
+describe('Order Controller', () => {
+    let orderId;
+
+    // Avant tous les tests, connectez-vous à la base de données MongoDB
+    beforeAll(async () => {
+        const url = 'mongodb://localhost:27017/orders_test'; // URL de test pour MongoDB
+        await mongoose.connect(url, { useNewUrlParser: true, useUnifiedTopology: true });
     });
-});
 
-afterAll((done) => {
-    server.close(() => {
-        console.log('Test server closed');
-        done();
-    });
-});
-
-describe('API Tests', () => {
-    it('GET /customers - should return all customers', async () => {
-        const response = await request(server).get('/customers');
-        expect(response.statusCode).toBe(200);
-        expect(response.body).toBeInstanceOf(Array);
+    // Après tous les tests, nettoyez la base de données et déconnectez-vous
+    afterAll(async () => {
+        await mongoose.connection.db.dropDatabase();
+        await mongoose.connection.close();
     });
 
-    it('POST /customers - should create a new customers', async () => {
-        const req = {
-            body:{
-                _id: '664e46374248b620aba521c7',
-                name: 'John',
-                lastname: 'DOE',
-                email: 'john@example.com',
-                phone: 1234567890,
-                address: {
-                    postalCode: 1234,
-                    city: 'New York',
-                    street: '5th Avenue',
-                  },
-                company: true,
-                
-            }
-           
-        };
+    describe('createOrder', () => {
+        it('devrait créer une nouvelle commande', async () => {
+            const newOrderData = {
+                customer: '60d21b4667d0d8992e610c85',
+                products: ['60d21b4767d0d8992e610c86'],
+                totalAmount: 100
+            };
 
+            // Mock des réponses API pour le client et le produit
+            const mock = new MockAdapter(axios);
+            mock.onGet(`http://127.0.0.2/api/customers/${newOrderData.customer}`).reply(200, { id: newOrderData.customer });
+            mock.onGet(`http://127.0.0.1/api/products/${newOrderData.products[0]}`).reply(200, { id: newOrderData.products[0] });
 
-    const saveStub = sinon.stub(Customer.prototype, 'save').resolves(req.body);
+            // Stub pour simuler l'enregistrement de la commande
+            const orderStub = sinon.stub(Order.prototype, 'save').resolves({ ...newOrderData, _id: '60d21b5467d0d8992e610c87' });
 
-      // Mock de l'objet de réponse
-      const res = { 
-        status: jest.fn(() => res), 
-        json: jest.fn(data => data)
-      };
+            const response = await request(app)
+                .post('/orders')
+                .send(newOrderData);
 
-      // Appel de la méthode createCustomer
-      await CustomerController.createCustomer(req, res);
+            expect(response.status).toBe(201);
+            expect(response.body).toHaveProperty('customer', newOrderData.customer);
+            expect(response.body).toHaveProperty('products');
+            expect(response.body.products).toContain(newOrderData.products[0]);
 
-      console.log(res.json)
-      console.log("------------fi json--------------")
-      console.log(req.body)
+            orderId = response.body._id; // Sauvegarde l'ID de la commande pour les tests ultérieurs
 
-      // Assertions
-      expect(res.status).toHaveBeenCalledWith(201);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-        name: 'John',
-        lastname: 'DOE',
-        email: 'john@example.com',
-        phone: 1234567890,
-        // Ajoutez d'autres propriétés si nécessaire
-      }));
+            orderStub.restore();
+        });
+    });
 
-      // Restauration du stub
-      saveStub.restore();
+    describe('getOrderById', () => {
+        it('devrait récupérer une commande par ID', async () => {
+            const response = await request(app)
+                .get(`/orders/${orderId}`);
 
+            expect(response.status).toBe(200);
+            expect(response.body).toHaveProperty('customer');
+            expect(response.body).toHaveProperty('products');
+        });
+    });
 
+    describe('getAllOrders', () => {
+        it('devrait récupérer toutes les commandes', async () => {
+            const response = await request(app)
+                .get('/orders');
 
+            expect(response.status).toBe(200);
+            expect(response.body).toBeInstanceOf(Array);
+            expect(response.body.length).toBeGreaterThan(0);
+        });
+    });
 
+    describe('updateOrder', () => {
+        it('devrait mettre à jour une commande', async () => {
+            const updatedOrderData = {
+                customer: '60d21b4667d0d8992e610c85',
+                products: ['60d21b4767d0d8992e610c86'],
+                totalAmount: 150
+            };
 
-        
-        // const response = await request(server).post('/customers').send(newCustomer);
-        // expect(response.statusCode).toBe(201);
-        // expect(response.body).toMatchObject(newCustomer);
+            const response = await request(app)
+                .put(`/orders/${orderId}`)
+                .send(updatedOrderData);
+
+            expect(response.status).toBe(200);
+            expect(response.body).toHaveProperty('customer', updatedOrderData.customer);
+            expect(response.body).toHaveProperty('products');
+            expect(response.body.products).toContain(updatedOrderData.products[0]);
+        });
+    });
+
+    describe('deleteOrder', () => {
+        it('devrait supprimer une commande', async () => {
+            const response = await request(app)
+                .delete(`/orders/${orderId}`);
+
+            expect(response.status).toBe(200);
+            expect(response.body).toHaveProperty('message', 'Commande supprimée avec succès.');
+        });
     });
 });

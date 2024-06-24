@@ -1,8 +1,28 @@
 const axios = require('axios');
 const Order = require('../models/Order'); 
+const amqp = require('amqplib/callback_api');
+const config = require("../config/config.js")
 
-const CUSTOMER_API_URL = 'http://127.0.0.1:3000/customers';
-const PRODUCT_API_URL = 'http://127.0.0.1:3000/products';
+const CUSTOMER_API_URL = 'http://127.0.0.1:3002/api//customers';
+const PRODUCT_API_URL = 'http://127.0.0.1:3001/api/products';
+
+function consumeFromQueue(queue, callback) {
+    amqp.connect('amqp://localhost', function (error0, connection) {
+        if (error0) {
+            throw error0;
+        }
+        connection.createChannel(function (error1, channel) {
+            if (error1) {
+                throw error1;
+            }
+            channel.assertQueue(queue, { durable: false });
+            console.log(" [*] Waiting for messages in %s. To exit press CTRL+C", queue);
+            channel.consume(queue, function (msg) {
+                callback(msg.content.toString());
+            }, { noAck: true });
+        });
+    });
+}
 
 const OrderController = {
     async createOrder(req, res) {
@@ -133,5 +153,18 @@ const OrderController = {
         }
     }
 }
+
+consumeFromQueue('product_created', async (message) => {
+    console.log(" [x] Received %s", message);
+    const product = JSON.parse(message);
+    // Traitement après réception du message produit créé
+    // Exemple: Créer une commande par défaut pour le produit créé
+    const newOrder = new Order({
+        productId: product._id,
+        quantity: 1,  // Par exemple, une commande par défaut de 1 unité
+        status: 'pending'
+    });
+    await newOrder.save();
+});
 
 module.exports = OrderController;
